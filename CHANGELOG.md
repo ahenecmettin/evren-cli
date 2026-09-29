@@ -1,3 +1,4 @@
+// CHANGELOG.md
 # Changelog
 
 Bu dosyada evren-cli'nin kullanıcıya görünür değişiklikleri tutulur.
@@ -5,6 +6,23 @@ Her geliştirme tesliminde `evren-cli.csproj` içindeki `<Version>` **bir arttı
 ve buraya yeni bir satır eklenir.
 
 Format: `[sürüm] — tarih — kısa açıklama`
+
+## 1.6.0 — 2025-01-18
+
+- Birden çok API anahtarı desteği: `~/.evren-cli/config.json` içindeki `"ApiKeys"` listesi,
+  `-k` bayrağı (tekrarlanabilir ya da virgüllü) ve `EVREN_API_KEY` (virgüllü) ile anahtar
+  havuzu oluşturulur; eski `"ApiKey"` alanı okunup listeye taşınır.
+- Otomatik devir (failover): bir anahtar kota/limit doldurduğunda (429/403/402) geçici
+  dinlenmeye alınır, geçersizse (401) kalıcı devre dışı bırakılır; istek **sıradaki hazır
+  anahtarla** kaldığı yerden devam eder (round-robin). Yanıt akışı başladıysa tekrar deneme
+  yapılmaz.
+- Yeni `/keys` REPL komutu: listeleme (`/keys`), ekleme (`/keys <anahtar[,anahtar2]>`),
+  silme (`/keys rm <no>`) ve durum sıfırlama (`/keys reset`). Anahtarlar maskeli gösterilir
+  (`evren_llm_abcd…wxyz`).
+- Yeni `ApiKeyPool` bileşeni anahtar durumlarını (hazır / beklemede / devre dışı),
+  kalan dinlenme sürelerini ve kullanım/arıza sayaçlarını yönetir.
+- Tek başına çalışan tek-anahtar kurulumları yeni davranıştan etkilenmez; kota yediğinde
+  aynı hata mesajını alır (artık hangi anahtarın dolduğu maskeli gösterilir).
 
 ## 1.5.0 — 2025-01-18
 

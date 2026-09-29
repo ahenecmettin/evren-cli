@@ -3,13 +3,29 @@
 A minimal agentic coding assistant for your terminal, powered by the EVREN LLM API. It can read and write files, list directories, run shell commands, and iterate on a task until it's done — all from an interactive prompt.
 
 ```
-EVREN CLI 1.4.0 — agentic file editing over EVREN LLM API
-commands: /mode <ask|plan|normal>  /model <name>  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /version  /help  /exit   (recommended for editing: /model glm-5.3)
+EVREN CLI 1.6.0 — agentic file editing over EVREN LLM API
+commands: /mode <ask|plan|normal>  /model <name>  /keys [add|rm <no>|reset]  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /version  /help  /exit   (recommended for editing: /model glm-5.3)
 🪐 evren 📁 ~/source/repos/my-project 🌿 (main)
 ❯ 
 ```
 
 The prompt shows the working directory (home shortened to `~`) and the current git branch, each with its own icon and color. The branch part is hidden outside a git repo; on a detached HEAD the short commit hash is shown instead.
+
+## Multiple API keys
+
+You can configure several API keys at once; when one runs out of quota the next one takes over automatically (round-robin):
+
+- `~/.evren-cli/config.json` → `"ApiKeys": ["evren_llm_aaa…", "evren_llm_bbb…"]` (the legacy
+  single `"ApiKey"` field is migrated automatically),
+- `evren-cli -k <key>` — repeatable, or comma-separate several keys in one flag,
+- `EVREN_API_KEY` env var — comma separated (wins over config; CLI wins over env).
+
+Failover rules: a key that returns 429/403/402 rests for its `Retry-After` window (min 60 s),
+a 401 key is disabled permanently, and the request continues with the next ready key.
+Once a response has started streaming it is never replayed on another key. Manage the pool
+live with `/keys` (list), `/keys <anahtar[,anahtar]>` (add), `/keys rm <no>` (remove),
+`/keys reset` (clear resting/disabled states). Keys are always shown masked
+(`evren_llm_abcd…wxyz`).
 
 ## Working modes
 

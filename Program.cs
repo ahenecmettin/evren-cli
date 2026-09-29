@@ -10,7 +10,8 @@ namespace evren_cli
         {
             Console.OutputEncoding = Encoding.UTF8;
 
-            string? model = null, key = null, cwd = null;
+            string? model = null, cwd = null;
+            var keys = new List<string>();
             var once = false;
             string? mode = null;
             var prompt = new List<string>();
@@ -23,7 +24,8 @@ namespace evren_cli
                         model = args[++i];
                         break;
                     case "--key" or "-k" when i + 1 < args.Length:
-                        key = args[++i];
+                        // Tekrarlanabilir: her -k yeni bir anahtar ekler.
+                        keys.AddRange(CliConfig.SplitKeys(args[++i]));
                         break;
                     case "--cwd" or "-C" when i + 1 < args.Length:
                         cwd = args[++i];
@@ -50,7 +52,9 @@ namespace evren_cli
             if (created)
                 Console.WriteLine($"\u001b[2m[config created at {CliConfig.ConfigPath}]\u001b[0m");
 
-            if (key is not null) config.ApiKey = key;
+            // Komut satırı anahtarları listenin başına eklenir: -k > EVREN_API_KEY > config.json.
+            foreach (var key in Enumerable.Reverse(keys))
+                config.AddKey(key, atFront: true);
             if (model is not null) config.Model = model;
 
             var workingDirectory = cwd is null ? Directory.GetCurrentDirectory() : Path.GetFullPath(cwd);
@@ -63,17 +67,30 @@ namespace evren_cli
             // Welcome banner — version first, then the resolved settings.
             Console.WriteLine($"\u001b[36m{VersionInfo.Product} {VersionInfo.Version}\u001b[0m — agentic file editing over EVREN LLM API");
 
+            // API anahtar havuzu: tek anahtar eskisi gibi çalışır; birden çok anahtar
+            // round-robin dağıtılır ve kota/limit yiyen anahtarın yerine otomatik geçilir.
+            var pool = new ApiKeyPool(config.ApiKeys);
+            pool.KeysChanged = keyList =>
+            {
+                config.ApiKeys = keyList.ToList();
+                config.Save();
+            };
+
             // API token check: warn and guide the user when it is missing/invalid.
-            if (!HasValidKey(config.ApiKey, out var keyWarning))
+            if (!HasAnyValidKey(pool, out var keyWarning))
             {
                 Console.WriteLine($"\u001b[33m{keyWarning}\u001b[0m");
                 Console.WriteLine($"\u001b[2m  Nasıl alınır: portalda 'Modeller ve API > API Anahtarları' sayfasından bir anahtar oluşturun (evren_llm_... ile başlar).\u001b[0m");
-                Console.WriteLine($"\u001b[2m  Nasıl ayarlanır: `evren-cli -k evren_llm_...` ya da environment variable EVREN_API_KEY, veya\t~/.evren-cli/config.json içindeki ApiKey alanı.\u001b[0m");
+                Console.WriteLine($"\u001b[2m  Nasıl ayarlanır: `evren-cli -k evren_llm_...` (birden çok -k verilebilir), EVREN_API_KEY\n  (virgülle birden çok anahtar alınabilir) veya ~/.evren-cli/config.json içindeki \"ApiKeys\" listesi.\u001b[0m");
                 Console.WriteLine($"\u001b[33mToken olmadan model çağrıları başarısız olur. /help ile komutları görebilirsiniz.\u001b[0m");
+            }
+            else if (pool.Count > 1)
+            {
+                Console.WriteLine($"\u001b[2m[api key havuzu: {pool.Count} anahtar; biri dolunca sıradakine otomatik geçilir — /keys ile görün]\u001b[0m");
             }
 
             using var appCts = new CancellationTokenSource();
-            using var client = new EvrenClient(config.BaseUrl!, config.ApiKey!);
+            using var client = new EvrenClient(config.BaseUrl!, pool);
             var tools = new FileTools(workingDirectory);
             var agent = new Agent(client, tools, config.Model!);
 
@@ -123,20 +140,21 @@ namespace evren_cli
         }
 
         /// <summary>
-        /// Returns true when the key looks like a usable EVREN LLM key.
-        /// Otherwise <paramref name="warning"/> carries the guidance message.
+        /// Havuzda en az bir geçerli görünümlü anahtar var mı? Yoksa
+        /// <paramref name="warning"/> kılavuz mesajını taşır.
         /// </summary>
-        static bool HasValidKey(string? apiKey, out string warning)
+        static bool HasAnyValidKey(ApiKeyPool pool, out string warning)
         {
-            if (string.IsNullOrWhiteSpace(apiKey))
+            if (pool.Count == 0)
             {
                 warning = "Uyarı: API anahtarı (token) ayarlı değil.";
                 return false;
             }
 
-            if (!apiKey.StartsWith("evren_llm_", StringComparison.Ordinal))
+            var invalid = pool.Entries.Count(e => !e.Key.StartsWith("evren_llm_", StringComparison.Ordinal));
+            if (invalid == pool.Count)
             {
-                warning = "Uyarı: anahtar 'evren_llm_' ile başlamıyor, geçersiz olabilir.";
+                warning = "Uyarı: hiçbir anahtar 'evren_llm_' ile başlamıyor, geçersiz olabilirler.";
                 return false;
             }
 
@@ -153,7 +171,9 @@ namespace evren_cli
 
                 Options:
                   -m, --model <name>   Model id (default from config, e.g. auto, glm-5.3)
-                  -k, --key <key>      API key override
+                  -k, --key <key>      API key override. Repeatable (or comma separated):
+                                       multiple keys form a pool; when one hits its quota
+                                       the next one takes over automatically.
                   -C, --cwd <dir>      Working directory (default: current)
                       --mode <mode>     Start in ask | plan | normal (default: normal)
                       --once           Run the given prompt once and exit (no REPL)
@@ -161,7 +181,10 @@ namespace evren_cli
                   -h, --help           Show this help
 
                 An interactive REPL starts after the optional initial prompt.
-                Env: EVREN_API_KEY overrides the configured key.
+                Env: EVREN_API_KEY — one or more keys (comma separated) overriding the config.
+                Manage keys live with /keys (list, add, remove).
+                Quick-commit with /commit or /commitat: stages everything, generates a
+                short commit message from the diff and commits (/commit <msg> uses yours).
                 """);
         }
     }

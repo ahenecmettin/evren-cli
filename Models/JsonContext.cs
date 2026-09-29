@@ -1,3 +1,4 @@
+// Models/JsonContext.cs
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -12,6 +13,7 @@ namespace evren_cli.Models;
 [JsonSerializable(typeof(TermsStatus))]
 [JsonSerializable(typeof(TermsAcceptRequest))]
 [JsonSerializable(typeof(ApiErrorResponse))]
+[JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(CliConfig))]
 [JsonSerializable(typeof(JsonElement))]
 [JsonSerializable(typeof(ReadFileArgs))]

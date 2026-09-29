@@ -6,7 +6,7 @@ using evren_cli.Tools;
 
 namespace evren_cli;
 
-public sealed class Agent
+public sealed partial class Agent
 {
     private const int MaxContinuations = 3;
     private const int DefaultMaxRounds = 100;
@@ -131,7 +131,7 @@ public sealed class Agent
         // 📁 /path/to/dir — çalışma dizini (sarı), ev dizini ~ ile kısaltılır
         prompt.Append($" {Yellow}{FolderIcon} {ShortenHome(_tools.WorkingDirectory)}{Reset}");
 
-        // kip rozeti — yalnizca ask/plan kiplerinde gorunur
+        // kip rozeti — yalnızca ask/plan kiplerinde görünür
         if (_gateway.Mode != AgentMode.Normal)
             prompt.Append($" {Yellow}{ModeInfo.Icon(_gateway.Mode)} {ModeInfo.Tag(_gateway.Mode)}{Reset}");
 
@@ -234,7 +234,7 @@ public sealed class Agent
 
     public async Task RunReplAsync(CancellationToken appCt)
     {
-        PrintHelp();
+        PrintHelpBrief();
         while (!appCt.IsCancellationRequested)
         {
             Console.Write(BuildPrompt());
@@ -248,12 +248,12 @@ public sealed class Agent
 
             if (input.StartsWith('/'))
             {
-                if (!HandleSlashCommand(input))
+                if (!await HandleSlashCommandAsync(input, appCt))
                     break;
                 continue;
             }
 
-            // 'ask: ...' / 'plan: ...' oneki kipi degistirir, mesaj olarak gonderilmez.
+            // 'ask: ...' / 'plan: ...' öneki kipi değiştirir, mesaj olarak gönderilmez.
             if (ModeInfo.StripPrefix(ref input) is { } prefix)
             {
                 _gateway.SetMode(prefix);
@@ -267,7 +267,7 @@ public sealed class Agent
         }
     }
 
-    private bool HandleSlashCommand(string input)
+    private async Task<bool> HandleSlashCommandAsync(string input, CancellationToken ct)
     {
         var parts = input.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         switch (parts[0].ToLowerInvariant())
@@ -291,6 +291,8 @@ public sealed class Agent
                     $"{Dim}[tokens: {_tokens.TotalPromptTokens} prompt + {_tokens.TotalCompletionTokens} completion " +
                     $"across {_tokens.RequestsReported} request(s) | history ~{used}/{_tokens.HistoryBudget}]{Reset}");
                 return true;
+            case "/keys":
+                return HandleKeys(parts.Length > 1 ? parts[1] : "");
             case "/model":
                 if (parts.Length > 1)
                 {
@@ -356,17 +358,66 @@ public sealed class Agent
                     Console.WriteLine($"{Dim}[mode: {ModeInfo.Summary(_gateway.Mode)}]{Reset}");
                 }
                 return true;
+            case "/commit":
+            case "/commitat":
+                // Kısa yol: değişiklikleri aşamaya al, modele kısa mesaj üret, commit'le.
+                await HandleCommitAsync(input, ct);
+                return true;
             default:
                 Console.WriteLine($"{Red}Unknown command: {parts[0]} (try /help){Reset}");
                 return true;
         }
     }
 
-    private void PrintHelp()
+    /// <summary>
+    /// API anahtar havuzunu yönetir: <c>/keys</c> listeler, <c>/keys &lt;anahtar&gt;</c>
+    /// ekler (virgülle birden çok), <c>/keys rm &lt;no&gt;</c> siler,
+    /// <c>/keys reset</c> bekleme/devre dışı durumlarını temizler.
+    /// </summary>
+    private bool HandleKeys(string rest)
     {
-        Console.WriteLine(
-            $"{Dim}commands: /mode <ask|plan|normal>  /model <name>  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /version  /help  /exit " +
-            $"(recommended for editing: /model glm-5.3){Reset}");
+        var pool = _client.Pool;
+        var args = rest.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (args.Length == 0)
+        {
+            Console.WriteLine($"{Dim}API anahtarları ({pool.StatusLine()}){Reset}");
+            Console.WriteLine(pool.EntryLines(color: true));
+            Console.WriteLine($"{Dim}ekle: /keys <anahtar> — sil: /keys rm <no> — durumları sıfırla: /keys reset{Reset}");
+            return true;
+        }
+
+        switch (args[0].ToLowerInvariant())
+        {
+            case "rm" or "remove" or "del":
+                if (args.Length < 2 || !int.TryParse(args[1], out var index))
+                {
+                    Console.WriteLine($"{Red}Usage: /keys rm <numara>{Reset}");
+                    return true;
+                }
+                if (!pool.RemoveAt(index))
+                {
+                    Console.WriteLine($"{Red}Anahtar bulunamadı: {args[1]} (1-{pool.Count}){Reset}");
+                    return true;
+                }
+                Console.WriteLine($"{Dim}[anahtar #{index} silindi — {pool.StatusLine()}]{Reset}");
+                return true;
+
+            case "reset" or "clear":
+                pool.ResetStates();
+                Console.WriteLine($"{Dim}[anahtar durumları sıfırlandı — {pool.StatusLine()}]{Reset}");
+                return true;
+
+            default:
+                var added = 0;
+                foreach (var key in CliConfig.SplitKeys(rest))
+                    if (pool.Add(key))
+                        added++;
+                Console.WriteLine(added == 0
+                    ? $"{Dim}[yeni anahtar eklenmedi (zaten kayıtlı)]{Reset}"
+                    : $"{Green}[{added} anahtar eklendi — {pool.StatusLine()}]{Reset}");
+                return true;
+        }
     }
 
     /// <summary>
@@ -417,7 +468,9 @@ public sealed class Agent
                 Console.WriteLine();
                 Console.Error.WriteLine($"{Red}API error: {ex.Message}{Reset}");
                 if (ex.StatusCode == System.Net.HttpStatusCode.BadRequest)
-                    Console.Error.WriteLine($"{Dim}[ipucu: /clear ile gecmisi sifirlayip tekrar deneyin]{Reset}");
+                    Console.Error.WriteLine($"{Dim}[ipucu: /clear ile geçmişi sıfırlayıp tekrar deneyin]{Reset}");
+                if (ex.Failover)
+                    Console.Error.WriteLine($"{Dim}[ipucu: /keys ile listeyi görün, /keys <yeni anahtar> ile ekleyin; kota dolan anahtarlar otomatik dinlenmeye alınır]{Reset}");
                 return;
             }
             catch (HttpRequestException ex)
