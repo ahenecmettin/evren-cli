@@ -1,3 +1,4 @@
+// Tools/FileTools.cs (215 lines)
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -23,8 +24,9 @@ public sealed class FileTools
 
     public List<ToolDefinition> Definitions =>
     [
-        Tool("read_file", "Read the full text content of a file. Always read a file before editing it.",
-            """{"type":"object","properties":{"path":{"type":"string","description":"File path relative to the working directory"}},"required":["path"]}"""),
+        Tool("read_file", "Read the text content of a file. Always read a file before editing it. " +
+             "Use 'offset' (1-based start line) and 'limit' (line count) to read a targeted range of a large file instead of the whole thing.",
+            """{"type":"object","properties":{"path":{"type":"string","description":"File path relative to the working directory"},"offset":{"type":"integer","description":"1-based line number to start reading from (default: 1)"},"limit":{"type":"integer","description":"Maximum number of lines to return"}},"required":["path"]}"""),
         Tool("write_file", "Create or overwrite a file with the given full content. Parent directories are created automatically.",
             """{"type":"object","properties":{"path":{"type":"string","description":"File path relative to the working directory"},"content":{"type":"string","description":"Complete new file content"}},"required":["path","content"]}"""),
         Tool("list_files", "Recursively list files under a directory (bin/obj/.git/node_modules are skipped).",
@@ -94,6 +96,29 @@ public sealed class FileTools
 
         var info = new FileInfo(full);
         var text = File.ReadAllText(full);
+
+        // Targeted range: 'offset' is the 1-based first line, 'limit' the max line count.
+        // When either is set, only the requested slice is returned (and the byte cap
+        // applies to the slice, not the whole file).
+        if (args.Offset is > 0 || args.Limit is > 0)
+        {
+            var lines = text.Split('\n');
+            var totalLines = lines.Length;
+
+            var start = args.Offset is > 0 ? args.Offset.Value : 1;
+            if (start > totalLines)
+                return $"Error: offset {start} is beyond the end of the file ({totalLines} lines).";
+
+            var count = args.Limit is > 0 ? args.Limit.Value : totalLines - start + 1;
+            var end = Math.Min(start + count - 1, totalLines);
+            var slice = string.Join('\n', lines[(start - 1)..end]);
+
+            if (slice.Length > MaxReadBytes)
+                slice = slice[..MaxReadBytes] + "\n... (truncated)";
+
+            return $"// {args.Path} (lines {start}-{end} of {totalLines})\n{slice}";
+        }
+
         var truncated = false;
         if (info.Length > MaxReadBytes)
         {
@@ -101,8 +126,8 @@ public sealed class FileTools
             truncated = true;
         }
 
-        var lines = text.Split('\n').Length;
-        var header = $"// {args.Path} ({lines} lines{(truncated ? ", TRUNCATED" : "")})\n";
+        var lines2 = text.Split('\n').Length;
+        var header = $"// {args.Path} ({lines2} lines{(truncated ? ", TRUNCATED" : "")})\n";
         return header + text;
     }
 

@@ -1,3 +1,5 @@
+// Models/JsonContext.cs (58 lines)
+// Models/JsonContext.cs (updated)
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -18,6 +20,7 @@ namespace evren_cli.Models;
 [JsonSerializable(typeof(WriteFileArgs))]
 [JsonSerializable(typeof(ListFilesArgs))]
 [JsonSerializable(typeof(RunCommandArgs))]
+[JsonSerializable(typeof(CreatePlanArgs))]
 public sealed partial class EvrenJsonContext : JsonSerializerContext
 {
 }
@@ -25,6 +28,8 @@ public sealed partial class EvrenJsonContext : JsonSerializerContext
 public sealed class ReadFileArgs
 {
     [JsonPropertyName("path")] public string? Path { get; set; }
+    [JsonPropertyName("offset")] public int? Offset { get; set; }
+    [JsonPropertyName("limit")] public int? Limit { get; set; }
 }
 
 public sealed class WriteFileArgs
@@ -42,4 +47,13 @@ public sealed class ListFilesArgs
 public sealed class RunCommandArgs
 {
     [JsonPropertyName("command")] public string? Command { get; set; }
+}
+
+/// <summary>
+/// create_plan aracinin argumanlari.
+/// </summary>
+public sealed class CreatePlanArgs
+{
+    [JsonPropertyName("name")] public string Name { get; set; } = "";
+    [JsonPropertyName("content")] public string? Content { get; set; }
 }

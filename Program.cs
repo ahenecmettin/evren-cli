@@ -12,6 +12,7 @@ namespace evren_cli
 
             string? model = null, key = null, cwd = null;
             var once = false;
+            string? mode = null;
             var prompt = new List<string>();
 
             for (var i = 0; i < args.Length; i++)
@@ -26,6 +27,9 @@ namespace evren_cli
                         break;
                     case "--cwd" or "-C" when i + 1 < args.Length:
                         cwd = args[++i];
+                        break;
+                    case "--mode" when i + 1 < args.Length:
+                        mode = args[++i];
                         break;
                     case "--once":
                         once = true;
@@ -72,6 +76,17 @@ namespace evren_cli
             using var client = new EvrenClient(config.BaseUrl!, config.ApiKey!);
             var tools = new FileTools(workingDirectory);
             var agent = new Agent(client, tools, config.Model!);
+
+            if (mode is not null)
+            {
+                var parsed = ModeInfo.ParseName(mode);
+                if (parsed is null)
+                {
+                    Console.Error.WriteLine($"Unknown mode: {mode} (ask | plan | normal)");
+                    return 1;
+                }
+                agent.SetMode(parsed.Value);
+            }
 
             // Register Ctrl+C handler to cancel the ongoing operation.
             Console.CancelKeyPress += (sender, e) =>
@@ -140,6 +155,7 @@ namespace evren_cli
                   -m, --model <name>   Model id (default from config, e.g. auto, glm-5.3)
                   -k, --key <key>      API key override
                   -C, --cwd <dir>      Working directory (default: current)
+                      --mode <mode>     Start in ask | plan | normal (default: normal)
                       --once           Run the given prompt once and exit (no REPL)
                   -v, --version        Show version and exit
                   -h, --help           Show this help

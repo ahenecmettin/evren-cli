@@ -6,6 +6,26 @@ ve buraya yeni bir satır eklenir.
 
 Format: `[sürüm] — tarih — kısa açıklama`
 
+## 1.5.0 — 2025-01-18
+
+- Çalışma kipleri (modes) eklendi: `normal` (tam düzenleme), `ask` (salt okuma — `write_file`
+  kapalı, `run_command` yalnızca salt okuma komutlarına izin verir) ve `plan` (kaynak
+  dosyalara dokunmadan `create_plan` aracıyla `plans/<ad>/plan.md` üretir).
+- Yeni `ToolGateway` katmanı kip kısıtlarını araç çağrısında zorlar; `create_plan` aracı
+  yalnızca plan kipinde açıktır.
+- Kip seçimi: REPL komutu `/mode <ask|plan|normal>`, satır önü ön eki (`ask: …`, `plan: …`,
+  `normal: …`) ve `--mode` CLI bayrağı.
+- REPL prompt'unda aktif kip rozeti gösterilir (normal kipte gizli).
+
+## 1.4.0 — 2025-01-18
+
+- `read_file` tool'u hedefli okuma destekler: `offset` (1 tabanlı başlangıç satırı) ve
+  `limit` (döndürülecek satır sayısı) parametreleriyle büyük dosyaların yalnızca ilgili
+  bölümü okunur — token maliyeti düşer.
+- Sistem prompt'una "Token cost optimization" kuralları eklendi: hedefli okuma, küçük
+  dosya bazında düzenleme, `git diff`/`git log` ile önce kontrol ve `list_files`'a her
+  zaman `pattern` verme.
+
 ## 1.3.0 — 2025-01-18
 
 - REPL prompt'u tamamlanır: çalışma dizininin tam yolu (ev dizini `~` ile kısaltılır)
@@ -13,25 +33,3 @@ Format: `[sürüm] — tarih — kısa açıklama`
   `🪐 evren 📁 ~/source/repos/evren-cli 🌿 (main)` + `❯`.
 - Prompt ikonları: 🪐 (ürün), 📁 (dizin), 🌿 (dal), ❯ (imleç).
 - Ayrık (detached) HEAD durumunda dal yerine kısa commit hash'i (`@1a2b3c4`) gösterilir.
-
-## 1.2.0 — 2025-01-18
-
-- `Ctrl+C` ile iptal edildiğinde araç (tool) çalışması tamamlanır, `HTTP 400` hatası ("Expecting ',' delimiter") önlenir.
-- `Agent.RunTurnAsync` içindeki `OperationCanceledException`'ı yakalayarak geçersiz isteklerin oluşmasını önler.
-- `Agent.RunTurnAsync` içindeki `RollbackLastUserMessage` ile iptalde bir önceki kullanıcı mesajı silinir.
-- `TokenManager` sınıfı optimize edilir: `PromptEstimate` ve `Estimate` performansı artar, `TrackAdded`/`TrackRemoved` ile O(1) tahmin.
-- `EvrenClient` içinde `SanitizeArguments` ile akış sırasında kesik JSON gelen argümanlar düzgün hale getirilir.
-- `Agent.cs`'te `PrintHelp` metodu ve `RunReplAsync` için `Console.CancelKeyPress` olayı eklenir.
-- `Agent.cs`'te `RunTurnAsync` içinde `ToolCall`'ların iptal durumunda `tool` sonucu eklenir.
-- `README.md`'ye "Sürüm politikası" bölümü güncellenir.
-
-## 1.1.0 — 2025-01-17
-
-- Başlangıçta hoş geldiniz mesajı: ürün adı + sürüm numarası artık açılışta gösteriliyor.
-- `--version` / `-v` bayrağı eklendi: yalnızca sürümü yazıp çıkar.
-- Token (API anahtarı) eksik/geçersizse açılışta sarı renkli uyarı ve adım adım yönlendirme:
-  nereden alınır, nasıl ayarlanır (`-k`, `EVREN_API_KEY`, `~/.evren-cli/config.json`).
-- `VersionInfo.cs` eklendi: sürüm bilgisi için tek doğruluk kaynağı (AOT-trim güvenli fallback ile).
-- `<Version>`, `<InformationalVersion>` vb. csproj'a eklendi; README ve yardım metnine sürüm politikası notu işlendi.
-- `/help` ve `/version` REPL komutları sürüm bilgisini gösterir.
-- README'ye "Sürüm politikası" bölümü eklendi (aşağıda).

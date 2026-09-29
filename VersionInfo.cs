@@ -1,3 +1,4 @@
+// VersionInfo.cs (47 lines)
 // VersionInfo.cs
 using System.Reflection;
 
@@ -12,7 +13,7 @@ namespace evren_cli;
 public static class VersionInfo
 {
     /// <summary>Keep in sync with &lt;Version&gt; in evren-cli.csproj (used if reflection is trimmed away).</summary>
-    public const string FallbackVersion = "1.3.0";
+    public const string FallbackVersion = "1.5.0";
 
     public const string Product = "EVREN CLI";
 

@@ -1,3 +1,4 @@
+// Agent.cs (462 lines)
 // Agent.cs (459 lines)
 // Agent.cs (386 lines)
 // Agent.cs (337 lines)
@@ -33,6 +34,7 @@ public sealed class Agent
 
     private readonly EvrenClient _client;
     private readonly FileTools _tools;
+    private readonly ToolGateway _gateway;
     private readonly List<ChatMessage> _history = new();
     private readonly TokenManager _tokens;
     private string _model;
@@ -44,6 +46,7 @@ public sealed class Agent
     {
         _client = client;
         _tools = tools;
+        _gateway = new ToolGateway(tools);
         _model = model;
         _maxTokens = maxTokens is > 0 ? maxTokens.Value : DefaultMaxTokens;
         _maxRounds = maxRounds is > 0 ? maxRounds.Value : DefaultMaxRounds;
@@ -58,6 +61,12 @@ public sealed class Agent
 
     /// <summary>Current tool-round limit per turn — shown in the welcome banner.</summary>
     public int MaxRounds => _maxRounds;
+
+    /// <summary>Active working mode (normal / ask / plan).</summary>
+    public AgentMode Mode => _gateway.Mode;
+
+    /// <summary>Switches the working mode (used by <c>/mode</c> and CLI flags).</summary>
+    public void SetMode(AgentMode mode) => _gateway.SetMode(mode);
 
     /// <summary>Session-wide token usage reported by the server.</summary>
     public TokenManager Tokens => _tokens;
@@ -83,6 +92,12 @@ public sealed class Agent
 
         You have tools: list_files, read_file, write_file, run_command.
         Rights: list_files, read_file, write_file, run_command.
+
+        Working modes: normal (default, full editing), ask (read-only; write_file is disabled and
+        run_command only accepts read-only inspection commands), plan (no source edits; produce the
+        plan with the create_plan tool, which saves it as plans/<name>/plan.md).
+        In ask or plan mode never try to modify files or run mutating commands — the gateway rejects
+        them; tell the user to switch with /mode normal instead.
         Rules:
         - Always read a file with read_file before modifying it; then write the COMPLETE updated file with write_file.
         - Use list_files to discover the project structure when paths are unknown.
@@ -91,6 +106,17 @@ public sealed class Agent
         - Do not ask for confirmation; changes are applied automatically.
         - When finished, briefly summarize what you changed. Keep the summary short.
         - Reply in the same language the user writes in.
+
+        Token cost optimization:
+        - Read only what you need: instead of full read_file on big files, use run_command
+          with `Select-String -Context 20,40` (or grep -n -A/-B on Unix) to pull a targeted
+          line range around the relevant symbol/method.
+        - Edit locally: when you only change one method, prefer splitting it into a small
+          file containing just that piece, and rewrite only that file — never re-send a whole
+          large file you haven't touched.
+        - Check what already exists first: use `git diff` and `git log` to see what has
+          already been done before reading the files the turn is about.
+        - Always pass a glob `pattern` to list_files (e.g. *.cs) instead of dumping every file.
         """;
 
     /// <summary>
@@ -108,6 +134,10 @@ public sealed class Agent
 
         // 📁 /path/to/dir — çalışma dizini (sarı), ev dizini ~ ile kısaltılır
         prompt.Append($" {Yellow}{FolderIcon} {ShortenHome(_tools.WorkingDirectory)}{Reset}");
+
+        // kip rozeti — yalnizca ask/plan kiplerinde gorunur
+        if (_gateway.Mode != AgentMode.Normal)
+            prompt.Append($" {Yellow}{ModeInfo.Icon(_gateway.Mode)} {ModeInfo.Tag(_gateway.Mode)}{Reset}");
 
         // 🌿 (branch) — git dalı (yeşil); repo değilse gösterilmez
         var branch = GetGitBranch();
@@ -227,6 +257,16 @@ public sealed class Agent
                 continue;
             }
 
+            // 'ask: ...' / 'plan: ...' oneki kipi degistirir, mesaj olarak gonderilmez.
+            if (ModeInfo.StripPrefix(ref input) is { } prefix)
+            {
+                _gateway.SetMode(prefix);
+                Console.WriteLine($"{Dim}[mode \u2192 {ModeInfo.Tag(prefix)}]{Reset}");
+            }
+
+            if (input.Length == 0)
+                continue;
+
             await RunTurnAsync(input, appCt);
         }
     }
@@ -302,6 +342,24 @@ public sealed class Agent
                     Console.WriteLine($"{Dim}[max_rounds: {_maxRounds}]{Reset}");
                 }
                 return true;
+            case "/mode":
+                if (parts.Length > 1)
+                {
+                    var target = ModeInfo.ParseName(parts[1]);
+                    if (target is null)
+                    {
+                        Console.WriteLine($"{Red}Unknown mode: {parts[1]} (ask | plan | normal){Reset}");
+                        return true;
+                    }
+
+                    _gateway.SetMode(target.Value);
+                    Console.WriteLine($"{Dim}[mode \u2192 {ModeInfo.Summary(target.Value)}]{Reset}");
+                }
+                else
+                {
+                    Console.WriteLine($"{Dim}[mode: {ModeInfo.Summary(_gateway.Mode)}]{Reset}");
+                }
+                return true;
             default:
                 Console.WriteLine($"{Red}Unknown command: {parts[0]} (try /help){Reset}");
                 return true;
@@ -311,7 +369,7 @@ public sealed class Agent
     private void PrintHelp()
     {
         Console.WriteLine(
-            $"{Dim}commands: /model <name>  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /version  /help  /exit " +
+            $"{Dim}commands: /mode <ask|plan|normal>  /model <name>  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /version  /help  /exit " +
             $"(recommended for editing: /model glm-5.3){Reset}");
     }
 
@@ -333,12 +391,12 @@ public sealed class Agent
             if (compaction is not null)
                 Console.WriteLine($"{Dim}[context compacted: {compaction}]{Reset}");
 
-            var promptEstimate = _tokens.PromptEstimate(_history, _tools.Definitions);
+            var promptEstimate = _tokens.PromptEstimate(_history, _gateway.Definitions);
             var request = new ChatRequest
             {
                 Model = _model,
                 Messages = _history,
-                Tools = _tools.Definitions,
+                Tools = _gateway.Definitions,
                 MaxTokens = _maxTokens
             };
 
@@ -392,7 +450,7 @@ public sealed class Agent
                     try
                     {
                         Console.WriteLine($"{Dim}\u2022 {name}{Reset}");
-                        output = await _tools.ExecuteAsync(name, call.Function.Arguments ?? "{}", ct);
+                        output = await _gateway.ExecuteAsync(name, call.Function.Arguments ?? "{}", ct);
                     }
                     catch (OperationCanceledException) when (ct.IsCancellationRequested)
                     {
