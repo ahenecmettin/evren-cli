@@ -1,3 +1,4 @@
+// EvrenClient.cs
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
@@ -14,6 +15,16 @@ public sealed class EvrenApiException : Exception
     {
         StatusCode = statusCode;
     }
+}
+
+/// <summary>
+/// Assembled assistant message plus the provider's finish_reason and (when the
+/// server reports it) token usage, so callers can detect truncated responses
+/// ("length") and track real prompt/completion token consumption.
+/// </summary>
+public sealed record StreamResult(ChatMessage Message, string? FinishReason, Usage? Usage = null)
+{
+    public bool Truncated => string.Equals(FinishReason, "length", StringComparison.OrdinalIgnoreCase);
 }
 
 public sealed class EvrenClient : IDisposable
@@ -52,7 +63,7 @@ public sealed class EvrenClient : IDisposable
         Console.WriteLine($"\u001b[2m[terms v{status.CurrentVersion} accepted]\u001b[0m");
     }
 
-    public async Task<ChatMessage> StreamChatAsync(
+    public async Task<StreamResult> StreamChatAsync(
         ChatRequest request,
         Action<string> onReasoning,
         Action<string> onContent,
@@ -74,6 +85,8 @@ public sealed class EvrenClient : IDisposable
         var content = new StringBuilder();
         var toolCalls = new SortedDictionary<int, ToolCall>();
         var argBuffers = new Dictionary<int, StringBuilder>();
+        string? finishReason = null;
+        Usage? usage = null;
 
         await using var stream = await response.Content.ReadAsStreamAsync(ct);
         using var reader = new StreamReader(stream, Encoding.UTF8);
@@ -105,11 +118,20 @@ public sealed class EvrenClient : IDisposable
             if (chunk.Error is not null)
                 throw new EvrenApiException(chunk.Error.Message ?? "Unknown stream error");
 
+            // usage typically arrives on the final chunk (with include_usage=true).
+            if (chunk.Usage is not null)
+                usage = chunk.Usage;
+
             if (chunk.Choices is null)
                 continue;
 
             foreach (var choice in chunk.Choices)
             {
+                // finish_reason arrives on a chunk whose delta is usually absent,
+                // so it must be captured before the delta null-check.
+                if (!string.IsNullOrEmpty(choice.FinishReason))
+                    finishReason = choice.FinishReason;
+
                 var delta = choice.Delta;
                 if (delta is null)
                     continue;
@@ -147,20 +169,59 @@ public sealed class EvrenClient : IDisposable
             }
         }
 
-        var i = 0;
         foreach (var (index, call) in toolCalls)
         {
-            call.Function.Arguments = argBuffers[index].ToString();
+            call.Function.Arguments = SanitizeArguments(argBuffers[index].ToString());
             call.Id ??= $"call_{Guid.NewGuid():N}";
-            i++;
         }
 
-        return new ChatMessage
+        var message = new ChatMessage
         {
             Role = "assistant",
             Content = content.Length > 0 ? content.ToString() : null,
             ToolCalls = toolCalls.Count > 0 ? toolCalls.Values.ToList() : null
         };
+
+        return new StreamResult(message, finishReason, usage);
+    }
+
+    /// <summary>
+    /// Makes sure tool-call arguments are valid JSON before they are echoed back
+    /// to the server in the next request. Streaming can produce a truncated or
+    /// malformed fragment; the server then fails to parse it and answers with
+    /// HTTP 400 ("Expecting ',' delimiter ..."). We defensively keep the longest
+    /// valid JSON prefix or fall back to an empty object.
+    /// </summary>
+    private static string SanitizeArguments(string arguments)
+    {
+        if (string.IsNullOrWhiteSpace(arguments))
+            return "{}";
+
+        if (IsValidJson(arguments))
+            return arguments;
+
+        // Try to salvage the longest valid JSON prefix (the common case is a
+        // truncated trailing quote/brace), then fall back to a clean object.
+        for (var cut = arguments.Length - 1; cut > 0; cut--)
+        {
+            if (IsValidJson(arguments[..cut]))
+                return arguments[..cut];
+        }
+
+        return "{}";
+    }
+
+    private static bool IsValidJson(string text)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(text);
+            return doc.RootElement.ValueKind is JsonValueKind.Object or JsonValueKind.Array;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static async Task ThrowIfErrorAsync(HttpResponseMessage response, CancellationToken ct)

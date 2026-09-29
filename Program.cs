@@ -1,4 +1,5 @@
-﻿using System.Text;
+// Program.cs
+using System.Text;
 using evren_cli.Tools;
 
 namespace evren_cli
@@ -29,6 +30,9 @@ namespace evren_cli
                     case "--once":
                         once = true;
                         break;
+                    case "--version" or "-v":
+                        Console.WriteLine($"{VersionInfo.Product} {VersionInfo.Version}");
+                        return 0;
                     case "--help" or "-h":
                         PrintUsage();
                         return 0;
@@ -45,9 +49,6 @@ namespace evren_cli
             if (key is not null) config.ApiKey = key;
             if (model is not null) config.Model = model;
 
-            if (!config.ApiKey!.StartsWith("evren_llm_", StringComparison.Ordinal))
-                Console.WriteLine("\u001b[33mUyarı: anahtar 'evren_llm_' ile başlamıyor. LLM API için portalda Modeller ve API > API Anahtarları sayfasından anahtar oluşturun.\u001b[0m");
-
             var workingDirectory = cwd is null ? Directory.GetCurrentDirectory() : Path.GetFullPath(cwd);
             if (!Directory.Exists(workingDirectory))
             {
@@ -55,10 +56,30 @@ namespace evren_cli
                 return 1;
             }
 
+            // Welcome banner — version first, then the resolved settings.
+            Console.WriteLine($"\u001b[36m{VersionInfo.Product} {VersionInfo.Version}\u001b[0m — agentic file editing over EVREN LLM API");
+
+            // API token check: warn and guide the user when it is missing/invalid.
+            if (!HasValidKey(config.ApiKey, out var keyWarning))
+            {
+                Console.WriteLine($"\u001b[33m{keyWarning}\u001b[0m");
+                Console.WriteLine($"\u001b[2m  Nasıl alınır: portalda 'Modeller ve API > API Anahtarları' sayfasından bir anahtar oluşturun (evren_llm_... ile başlar).\u001b[0m");
+                Console.WriteLine($"\u001b[2m  Nasıl ayarlanır: `evren-cli -k evren_llm_...` ya da environment variable EVREN_API_KEY, veya\t~/.evren-cli/config.json içindeki ApiKey alanı.\u001b[0m");
+                Console.WriteLine($"\u001b[33mToken olmadan model çağrıları başarısız olur. /help ile komutları görebilirsiniz.\u001b[0m");
+            }
+
             using var appCts = new CancellationTokenSource();
             using var client = new EvrenClient(config.BaseUrl!, config.ApiKey!);
             var tools = new FileTools(workingDirectory);
             var agent = new Agent(client, tools, config.Model!);
+
+            // Register Ctrl+C handler to cancel the ongoing operation.
+            Console.CancelKeyPress += (sender, e) =>
+            {
+                e.Cancel = true;
+                appCts.Cancel();
+                Console.WriteLine($"\u001b[31m\n[Ctrl+C pressed, canceling...]\u001b[0m");
+            };
 
             try
             {
@@ -75,8 +96,6 @@ namespace evren_cli
                 return 1;
             }
 
-            Console.WriteLine("\u001b[36mEVREN CLI\u001b[0m — agentic file editing over EVREN LLM API");
-
             if (prompt.Count > 0)
             {
                 await agent.RunTurnAsync(string.Join(' ', prompt), appCts.Token);
@@ -88,9 +107,33 @@ namespace evren_cli
             return 0;
         }
 
+        /// <summary>
+        /// Returns true when the key looks like a usable EVREN LLM key.
+        /// Otherwise <paramref name="warning"/> carries the guidance message.
+        /// </summary>
+        static bool HasValidKey(string? apiKey, out string warning)
+        {
+            if (string.IsNullOrWhiteSpace(apiKey))
+            {
+                warning = "Uyarı: API anahtarı (token) ayarlı değil.";
+                return false;
+            }
+
+            if (!apiKey.StartsWith("evren_llm_", StringComparison.Ordinal))
+            {
+                warning = "Uyarı: anahtar 'evren_llm_' ile başlamıyor, geçersiz olabilir.";
+                return false;
+            }
+
+            warning = "";
+            return true;
+        }
+
         static void PrintUsage()
         {
-            Console.WriteLine("""
+            Console.WriteLine($"""
+                {VersionInfo.Product} {VersionInfo.Version}
+
                 evren-cli [options] [prompt...]
 
                 Options:
@@ -98,6 +141,7 @@ namespace evren_cli
                   -k, --key <key>      API key override
                   -C, --cwd <dir>      Working directory (default: current)
                       --once           Run the given prompt once and exit (no REPL)
+                  -v, --version        Show version and exit
                   -h, --help           Show this help
 
                 An interactive REPL starts after the optional initial prompt.
