@@ -1,4 +1,3 @@
-// Tools/FileTools.cs (215 lines)
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -126,8 +125,8 @@ public sealed class FileTools
             truncated = true;
         }
 
-        var lines2 = text.Split('\n').Length;
-        var header = $"// {args.Path} ({lines2} lines{(truncated ? ", TRUNCATED" : "")})\n";
+        var lineCount = text.Split('\n').Length;
+        var header = $"// {args.Path} ({lineCount} lines{(truncated ? ", TRUNCATED" : "")})\n";
         return header + text;
     }
 
@@ -142,7 +141,7 @@ public sealed class FileTools
         File.WriteAllText(full, content, new UTF8Encoding(false));
 
         var lines = content.Length == 0 ? 0 : content.Split('\n').Length;
-        Console.WriteLine($"\u001b[32m✎ wrote {args.Path} ({lines} lines)\u001b[0m");
+        Console.WriteLine($"\u001b[32mâœ wrote {args.Path} ({lines} lines)\u001b[0m");
         return $"Wrote {args.Path} ({lines} lines).";
     }
 

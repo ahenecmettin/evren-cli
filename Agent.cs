@@ -1,7 +1,3 @@
-// Agent.cs (462 lines)
-// Agent.cs (459 lines)
-// Agent.cs (386 lines)
-// Agent.cs (337 lines)
 // Agent.cs
 using System.Diagnostics;
 using System.Text;

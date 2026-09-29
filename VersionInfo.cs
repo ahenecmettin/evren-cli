@@ -1,4 +1,3 @@
-// VersionInfo.cs (47 lines)
 // VersionInfo.cs
 using System.Reflection;
 

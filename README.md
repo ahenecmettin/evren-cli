@@ -1,6 +1,3 @@
-// README.md (18 lines)
-// README.md (10 lines)
-// README.md (140 lines)
 # evren-cli
 
 A minimal agentic coding assistant for your terminal, powered by the EVREN LLM API. It can read and write files, list directories, run shell commands, and iterate on a task until it's done — all from an interactive prompt.
