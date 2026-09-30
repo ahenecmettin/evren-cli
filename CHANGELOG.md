@@ -1,3 +1,4 @@
+// CHANGELOG.md (53 lines)
 // CHANGELOG.md
 # Changelog
 
@@ -6,6 +7,22 @@ Her geliştirme tesliminde `evren-cli.csproj` içindeki `<Version>` **bir arttı
 ve buraya yeni bir satır eklenir.
 
 Format: `[sürüm] — tarih — kısa açıklama`
+
+## 1.7.0 — 2025-01-18
+
+- Sistem prompt'una **araştırma disiplini** eklendi: araştırma adımları kısa ve sığ tutulur
+  (bir turda en fazla 2 keşif araç çağrısı — örn. bir `list_files`/grep + bir hedefli okuma).
+- Her kısa araştırma turundan sonra model **çıkarım kontrol noktası** verir: bulgular (1-3 madde)
+  → varsayımları açıkça belirtilmiş çıkarım → en fazla 2 kısa netleştirme sorusu; ardından
+  kullanıcı cevap vermeden araştırmaya/devam etmeye devam etmez.
+- Belirsizlik, yorum tercihi veya doğrulanmamış varsayım varsa model kullanıcıya sorar —
+  kod tabanını daha derin inceleyerek kendisi çözmez.
+- İkinci bir araştırma turuna (veya toplamda 2'den fazla yeni dosya okumaya / mimari çıkarım
+  yapmaya) geçmeden önce bir önceki çıkarımın kullanıcı tarafından onaylanması zorunludur.
+- Yalnızca tek adımlı, yorum gerektirmeyen sıradan görevlerde kontrol noktası atlanır.
+- "Do not ask for confirmation" kuralı, değişiklik uygulama onayı ile karışmasın diye
+  "changes are applied automatically / inference questions REQUIRED" olarak netleştirildi.
+- `BuildSystemPrompt()` kendi dosyasına taşındı: `Agent.Prompts.cs`.
 
 ## 1.6.0 — 2025-01-18
 

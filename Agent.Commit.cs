@@ -58,9 +58,8 @@ public sealed partial class Agent
             var generated = await GenerateCommitMessageAsync(diff, ct);
             if (generated is null)
             {
-                Console.WriteLine($"{Red}Commit mesajı üretilemedi.{Reset}");
-                Console.WriteLine($"{Dim}değişiklikler aşama alanında (staged) kaldı — elle: git commit -m \"...\"{Reset}");
-                return;
+                Console.WriteLine($"{Yellow}commit mesajı diff'ten deterministik olarak türetiliyor…{Reset}");
+                generated = FallbackCommitMessage(diff);
             }
 
             message = generated;
@@ -83,6 +82,8 @@ public sealed partial class Agent
     /// <summary>
     /// Diff'e göre tek satırlık kısa commit mesajı üretir. Son commit başlıkları
     /// stile örnek olarak eklenir; model yanıtından yalın mesaj ayıklanır.
+    /// Model boş yanıt dönerse/hataya düşerse null döner ve çağıran deterministik
+    /// fallback kullanır.
     /// </summary>
     private async Task<string?> GenerateCommitMessageAsync(string diff, CancellationToken ct)
     {
@@ -91,7 +92,11 @@ public sealed partial class Agent
         var request = new ChatRequest
         {
             Model = _model,
-            MaxTokens = 80,
+            // Reasoning yapan modeller yanıt üretmeden önce düşünme akışına
+            // token harcayabilir; 80 token'ın tamamı reasoning'e gidince content
+            // boş kalıyordu (→ "Commit mesajı üretilemedi"). Bütçeyi büyütüp
+            // yanıt için de alan bıraktık.
+            MaxTokens = 512,
             Messages =
             [
                 new ChatMessage
@@ -123,18 +128,73 @@ public sealed partial class Agent
         }
         catch (EvrenApiException ex)
         {
-            Console.Error.WriteLine($"{Red}API error: {ex.Message}{Reset}");
+            // Sebebi görünür yap; sessizce fallback'e geçme.
+            Console.Error.WriteLine($"{Yellow}API error: {ex.Message}{Reset}");
             return null;
         }
         catch (HttpRequestException ex)
         {
-            Console.Error.WriteLine($"{Red}Network error: {ex.Message}{Reset}");
+            Console.Error.WriteLine($"{Yellow}Network error: {ex.Message}{Reset}");
             return null;
         }
 
         var text = streamed.Length > 0 ? streamed.ToString() : result.Message.Content ?? "";
         var line = text.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0);
-        return line is null ? null : SanitizeCommitMessage(line);
+        if (line is null)
+            return null;
+
+        var sanitized = SanitizeCommitMessage(line);
+        return sanitized.Length > 0 ? sanitized : null;
+    }
+
+    /// <summary>
+    /// Model başarısız olursa diff'ten deterministik bir conventional-commit
+    /// mesajı üretir: değişen dosyaların yollarından kapsam ve özet inşa edilir.
+    /// Böylece /commit hiçbir durumda takılmaz.
+    /// </summary>
+    private static string FallbackCommitMessage(string diff)
+    {
+        var files = new List<string>();
+        foreach (var line in diff.Split('\n'))
+        {
+            // Yeni/eklenen dosyanın yolu (+) tarafından alınır; silinen dosyada
+            // bu taraf "/dev/null" olur ve atlanır.
+            if (line.StartsWith("+++ ", StringComparison.Ordinal) && line.Length > 4)
+            {
+                var path = line[4..].Trim().TrimStart('a', 'b');
+                if (path.Length > 0 && path != "/dev/null")
+                    files.Add(path);
+            }
+        }
+
+        var distinct = files.Distinct().ToList();
+        var menu = distinct.Count > 0 ? distinct : new List<string> { "değişiklikler" };
+
+        // Kod, belge yoksa genel amaçlı "chore:" kullanılır.
+        var kind = menu.Any(f => f.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                                 || f.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+                                 || f.EndsWith(".js", StringComparison.OrdinalIgnoreCase)
+                                 || f.EndsWith(".py", StringComparison.OrdinalIgnoreCase)
+                                 || f.EndsWith(".java", StringComparison.OrdinalIgnoreCase))
+            ? "fix"
+            : menu.Any(f => f.EndsWith(".md", StringComparison.OrdinalIgnoreCase)
+                            || f.EndsWith(".txt", StringComparison.OrdinalIgnoreCase))
+                ? "docs"
+                : "chore";
+
+        var scope = distinct.Count > 0 && distinct[0].Contains('/')
+            ? System.IO.Path.GetDirectoryName(distinct[0])?.Replace('\\', '/') ?? ""
+            : "";
+
+        var detail = distinct.Take(4).Select(f => f.Contains('/')
+            ? f[(f.LastIndexOf('/') + 1)..]
+            : f);
+
+        var msg = string.IsNullOrEmpty(scope)
+            ? $"{kind}: {string.Join(", ", detail)}"
+            : $"{kind}({scope}): {string.Join(", ", detail)}";
+
+        return msg.Length > 120 ? msg[..120].TrimEnd() : msg;
     }
 
     /// <summary>Tek satıra indirir; tırnak/kod bloğu gibi süsleri atar, aşırı uzunsa keser.</summary>

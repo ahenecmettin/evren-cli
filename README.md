@@ -3,13 +3,22 @@
 A minimal agentic coding assistant for your terminal, powered by the EVREN LLM API. It can read and write files, list directories, run shell commands, and iterate on a task until it's done — all from an interactive prompt.
 
 ```
-EVREN CLI 1.6.0 — agentic file editing over EVREN LLM API
-commands: /mode <ask|plan|normal>  /model <name>  /keys [add|rm <no>|reset]  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /version  /help  /exit   (recommended for editing: /model glm-5.3)
+EVREN CLI 1.7.0 — agentic file editing over EVREN LLM API
+commands: /mode <ask|plan|normal>  /model <name>  /keys [add|rm <no>|reset]  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /commit  /version  /help  /exit   (recommended for editing: /model glm-5.3)
 🪐 evren 📁 ~/source/repos/my-project 🌿 (main)
 ❯ 
 ```
 
 The prompt shows the working directory (home shortened to `~`) and the current git branch, each with its own icon and color. The branch part is hidden outside a git repo; on a detached HEAD the short commit hash is shown instead.
+
+## Shallow research, inference checkpoints
+
+Research steps are kept deliberately shallow: one batch means at most 2 exploration tool calls
+(one listing/search plus one targeted read). After each batch the agent pauses with a short
+inference checkpoint — findings, the inference with its explicit assumptions, and up to 2
+clarifying questions — and waits for your answer before researching further or editing.
+Ambiguities and unverified assumptions are resolved by asking you, not by deeper digging;
+only trivially clear single-step tasks skip the checkpoint.
 
 ## Multiple API keys
 
