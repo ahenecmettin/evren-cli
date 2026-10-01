@@ -12,6 +12,7 @@ public sealed partial class Agent
     private const int MaxContinuations = 3;
     private const int DefaultMaxRounds = 100;
     private const int DefaultMaxTokens = 16384;
+    private const int DefaultMaxResearch = 4;
     private const string Dim = "\u001b[2m";
     private const string Bold = "\u001b[1m";
     private const string Reset = "\u001b[0m";
@@ -37,16 +38,25 @@ public sealed partial class Agent
     private string _model;
     private int _maxTokens;
     private int _maxRounds;
+    private int _maxResearch;
+    private TurnPhase _phase = TurnPhase.Clarify;
+    private int _researchCalls;
+
+    // Kullanıcının onay niteliğindeki kısa yanıtları (research → implement geçişi).
+    private static readonly System.Text.RegularExpressions.Regex ConfirmPattern = new(
+        @"^\s*(ok|okay|okey|tamam|tamamdır|evet|yes|y|devam|devam et|go|proceed|başla|uygula|yap|onaylıyorum|onay|do it|lgtm|olur)\b[\s!.]*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.CultureInvariant);
 
     public Agent(EvrenClient client, FileTools tools, string model, int? maxTokens = null, int? maxRounds = null,
-        int? contextWindow = null, int? reserveTokens = null)
+        int? contextWindow = null, int? reserveTokens = null, int? maxResearch = null)
     {
         _client = client;
         _tools = tools;
-        _gateway = new ToolGateway(tools);
+        _gateway = new ToolGateway(tools) { OnAskUser = AskUserAsync };
         _model = model;
         _maxTokens = maxTokens is > 0 ? maxTokens.Value : DefaultMaxTokens;
         _maxRounds = maxRounds is > 0 ? maxRounds.Value : DefaultMaxRounds;
+        _maxResearch = maxResearch is > 0 ? maxResearch.Value : DefaultMaxResearch;
         _tokens = new TokenManager(
             contextWindow is > 0 ? contextWindow.Value : DefaultContextWindow,
             reserveTokens is > 0 ? reserveTokens.Value : DefaultReserveTokens);
@@ -58,6 +68,19 @@ public sealed partial class Agent
 
     /// <summary>Current tool-round limit per turn — shown in the welcome banner.</summary>
     public int MaxRounds => _maxRounds;
+
+    /// <summary>Consecutive read-only tool calls allowed before a forced checkpoint.</summary>
+    public int MaxResearch => _maxResearch;
+
+    /// <summary>Current task phase (clarify / research / implement).</summary>
+    public TurnPhase Phase => _phase;
+
+    /// <summary>Forces the phase (used by <c>/go</c> and <c>/clarify</c>).</summary>
+    public void SetPhase(TurnPhase phase)
+    {
+        _phase = phase;
+        _researchCalls = 0;
+    }
 
     /// <summary>Active working mode (normal / ask / plan).</summary>
     public AgentMode Mode => _gateway.Mode;
@@ -78,6 +101,7 @@ public sealed partial class Agent
     {
         _history.Clear();
         _tokens.ResetTracking(_history);
+        SetPhase(TurnPhase.Clarify);
         Push(new ChatMessage { Role = "system", Content = BuildSystemPrompt() });
     }
 
@@ -100,6 +124,10 @@ public sealed partial class Agent
         // kip rozeti — yalnızca ask/plan kiplerinde görünür
         if (_gateway.Mode != AgentMode.Normal)
             prompt.Append($" {Yellow}{ModeInfo.Icon(_gateway.Mode)} {ModeInfo.Tag(_gateway.Mode)}{Reset}");
+
+        // evre rozeti — clarify dışındaki evrelerde görünür
+        if (_phase != TurnPhase.Clarify)
+            prompt.Append($" {Dim}{PhaseInfo.Icon(_phase)} {PhaseInfo.Tag(_phase)}{Reset}");
 
         // 🌿 (branch) — git dalı (yeşil); repo değilse gösterilmez
         var branch = GetGitBranch();
@@ -306,6 +334,36 @@ public sealed partial class Agent
                     Console.WriteLine($"{Dim}[max_rounds: {_maxRounds}]{Reset}");
                 }
                 return true;
+            case "/maxresearch":
+                if (parts.Length > 1)
+                {
+                    if (int.TryParse(parts[1], out var research) && research > 0)
+                    {
+                        _maxResearch = research;
+                        Console.WriteLine($"{Dim}[max_research \u2192 {_maxResearch}]{Reset}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"{Red}Usage: /maxresearch <positive integer>{Reset}");
+                    }
+                }
+                else
+                {
+                    Console.WriteLine($"{Dim}[max_research: {_maxResearch}]{Reset}");
+                }
+                return true;
+            case "/go":
+            case "/implement":
+                SetPhase(TurnPhase.Implement);
+                Console.WriteLine($"{Dim}[phase \u2192 {PhaseInfo.Summary(_phase)}]{Reset}");
+                return true;
+            case "/clarify":
+                SetPhase(TurnPhase.Clarify);
+                Console.WriteLine($"{Dim}[phase \u2192 {PhaseInfo.Summary(_phase)}]{Reset}");
+                return true;
+            case "/phase":
+                Console.WriteLine($"{Dim}[phase: {PhaseInfo.Summary(_phase)}]{Reset}");
+                return true;
             case "/mode":
                 if (parts.Length > 1)
                 {
@@ -393,9 +451,23 @@ public sealed partial class Agent
     /// </summary>
     public async Task RunTurnAsync(string input, CancellationToken ct)
     {
+        // Research evresinde kısa bir onay yanıtı uygulamayı açar.
+        if (_phase == TurnPhase.Research && ConfirmPattern.IsMatch(input))
+        {
+            SetPhase(TurnPhase.Implement);
+            Console.WriteLine($"{Dim}[phase \u2192 implement]{Reset}");
+        }
+
+        var startPhase = _phase;
         Push(new ChatMessage { Role = "user", Content = input });
 
+        ChatMessage? nudge = null;
+        if (startPhase == TurnPhase.Clarify)
+            Push(nudge = new ChatMessage { Role = "system", Content = ClarifyNudge });
+
         var continuations = 0;
+        var forceCheckpoint = false;
+        _researchCalls = 0;
 
         for (var round = 1; round <= _maxRounds && !ct.IsCancellationRequested; round++)
         {
@@ -404,12 +476,17 @@ public sealed partial class Agent
             if (compaction is not null)
                 Console.WriteLine($"{Dim}[context compacted: {compaction}]{Reset}");
 
-            var promptEstimate = _tokens.PromptEstimate(_history, _gateway.Definitions);
+            // Clarify: araç yok. Research bütçesi dolunca: yalnızca ask_user. Aksi halde kipin araçları.
+            List<ToolDefinition>? tools = startPhase == TurnPhase.Clarify
+                ? null
+                : forceCheckpoint ? _gateway.CheckpointDefinitions : _gateway.Definitions;
+
+            var promptEstimate = _tokens.PromptEstimate(_history, tools ?? []);
             var request = new ChatRequest
             {
                 Model = _model,
                 Messages = _history,
-                Tools = _gateway.Definitions,
+                Tools = tools,
                 MaxTokens = _maxTokens
             };
 
@@ -424,12 +501,14 @@ public sealed partial class Agent
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+                RemoveMessage(nudge);
                 RollbackLastUserMessage();
                 Console.WriteLine($"\n{Yellow}[canceled]{Reset}");
                 return;
             }
             catch (EvrenApiException ex)
             {
+                RemoveMessage(nudge);
                 RollbackLastUserMessage();
                 Console.WriteLine();
                 Console.Error.WriteLine($"{Red}API error: {ex.Message}{Reset}");
@@ -441,6 +520,7 @@ public sealed partial class Agent
             }
             catch (HttpRequestException ex)
             {
+                RemoveMessage(nudge);
                 RollbackLastUserMessage();
                 Console.WriteLine();
                 Console.Error.WriteLine($"{Red}Network error: {ex.Message}{Reset}");
@@ -488,6 +568,32 @@ public sealed partial class Agent
                     }
 
                     Push(new ChatMessage { Role = "tool", ToolCallId = call.Id, Content = output });
+
+                    if (name == "ask_user")
+                    {
+                        _researchCalls = 0;
+                        forceCheckpoint = false;
+                    }
+                    else if (_phase == TurnPhase.Research &&
+                             _gateway.IsReadOnlyCall(name, call.Function.Arguments ?? "{}"))
+                    {
+                        _researchCalls++;
+                    }
+                }
+
+                if (_phase == TurnPhase.Research && !forceCheckpoint && _researchCalls >= _maxResearch)
+                {
+                    forceCheckpoint = true;
+                    Console.WriteLine($"{Yellow}[research budget reached ({_maxResearch}); checkpoint required]{Reset}");
+                    Push(new ChatMessage
+                    {
+                        Role = "system",
+                        Content = $"Research budget reached ({_maxResearch} read-only tool calls). Stop exploring now. " +
+                                  "Summarize what you found (1-3 bullets), state your inference and assumptions, then either " +
+                                  "call ask_user (kind='confirm' to request approval to implement, or kind='question' for a " +
+                                  "clarification) or reply with text and end your turn. Other tools are unavailable until " +
+                                  "you have asked the user."
+                    });
                 }
 
                 continue;
@@ -515,9 +621,59 @@ public sealed partial class Agent
             break;
         }
 
+        // Clarify yönergesi tek seferliktir; sonraki turları yanıltmasın diye geçmişten kaldır.
+        RemoveMessage(nudge);
+
+        // Evre geçişleri: clarify → research (kullanıcı yanıt verince araştırma başlar);
+        // implement turu metinle bitince görev tamamlandı sayılır → clarify.
+        if (startPhase == TurnPhase.Clarify && _phase == TurnPhase.Clarify)
+            SetPhase(TurnPhase.Research);
+        else if (startPhase == TurnPhase.Implement && _phase == TurnPhase.Implement)
+            SetPhase(TurnPhase.Clarify);
+
         if (_tokens.RequestsReported > 0)
             Console.WriteLine(
                 $"{Dim}[tokens: {_tokens.TotalPromptTokens} prompt + {_tokens.TotalCompletionTokens} completion]{Reset}");
+    }
+
+    private const string ClarifyNudge =
+        "Clarify phase: you have NO tools for this reply. Restate the task in 1-3 bullets, list your " +
+        "assumptions, and ask at most 3 concise questions (or offer option choices). Do not research or " +
+        "implement yet. If the request is trivially clear or a direct factual answer, say so briefly and answer.";
+
+    /// <summary>
+    /// <c>ask_user</c> aracı: soruyu (ve varsa seçenekleri) yazar, yanıtı okur ve araç
+    /// sonucu olarak döner. <c>confirm</c> türünde olumlu yanıt evreyi implement'a alır.
+    /// </summary>
+    private Task<string> AskUserAsync(AskUserArgs args, CancellationToken ct)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"{Cyan}{Bold}? {args.Question.Trim()}{Reset}");
+        if (args.Options is { Count: > 0 })
+            for (var i = 0; i < args.Options.Count; i++)
+                Console.WriteLine($"{Dim}  [{i + 1}] {args.Options[i]}{Reset}");
+
+        Console.Write($"{Cyan}{Caret}{Reset} ");
+        var answer = Console.ReadLine();
+        if (answer is null || ct.IsCancellationRequested)
+            throw new OperationCanceledException(ct);
+
+        answer = answer.Trim();
+        if (args.Options is { Count: > 0 } && int.TryParse(answer, out var index) &&
+            index >= 1 && index <= args.Options.Count)
+            answer = args.Options[index - 1];
+
+        _researchCalls = 0;
+
+        var confirm = string.Equals(args.Kind, "confirm", StringComparison.OrdinalIgnoreCase);
+        if (confirm && ConfirmPattern.IsMatch(answer))
+        {
+            SetPhase(TurnPhase.Implement);
+            Console.WriteLine($"{Dim}[phase \u2192 implement]{Reset}");
+            return Task.FromResult($"User answer: {answer}\nApproved — implementation phase unlocked; all tools are available now.");
+        }
+
+        return Task.FromResult(answer.Length == 0 ? "User gave no answer." : $"User answer: {answer}");
     }
 
     /// <summary>
@@ -531,5 +687,12 @@ public sealed partial class Agent
             _tokens.TrackRemoved(_history[^1]);
             _history.RemoveAt(_history.Count - 1);
         }
+    }
+
+    /// <summary>Removes a specific transient message (e.g. the clarify nudge) if it is still in the history.</summary>
+    private void RemoveMessage(ChatMessage? message)
+    {
+        if (message is not null && _history.Remove(message))
+            _tokens.TrackRemoved(message);
     }
 }

@@ -21,6 +21,7 @@ namespace evren_cli.Models;
 [JsonSerializable(typeof(ListFilesArgs))]
 [JsonSerializable(typeof(RunCommandArgs))]
 [JsonSerializable(typeof(CreatePlanArgs))]
+[JsonSerializable(typeof(AskUserArgs))]
 public sealed partial class EvrenJsonContext : JsonSerializerContext
 {
 }
@@ -56,4 +57,15 @@ public sealed class CreatePlanArgs
 {
     [JsonPropertyName("name")] public string Name { get; set; } = "";
     [JsonPropertyName("content")] public string? Content { get; set; }
+}
+
+/// <summary>
+/// ask_user aracinin argumanlari: soru, istege bagli secenekler ve tur
+/// ("question" | "confirm"). confirm olumlu yanitlanirsa evre implement'a gecer.
+/// </summary>
+public sealed class AskUserArgs
+{
+    [JsonPropertyName("question")] public string Question { get; set; } = "";
+    [JsonPropertyName("options")] public List<string>? Options { get; set; }
+    [JsonPropertyName("kind")] public string? Kind { get; set; }
 }

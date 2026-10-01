@@ -50,7 +50,13 @@ public sealed class ToolGateway
 
     public void SetMode(AgentMode mode) => _mode = mode;
 
-    /// <summary>Aktif kipe göre izin verilen araç tanımları.</summary>
+    /// <summary>
+    /// <c>ask_user</c> aracının gerçek yürütücüsü (konsol G/Ç Agent'ta kalır).
+    /// Atanmazsa araç hata metni döner.
+    /// </summary>
+    public Func<AskUserArgs, CancellationToken, Task<string>>? OnAskUser { get; set; }
+
+    /// <summary>Aktif kipe göre izin verilen araç tanımları (ask_user her kipte dahil).</summary>
     public List<ToolDefinition> Definitions
     {
         get
@@ -62,13 +68,46 @@ public sealed class ToolGateway
             if (_mode == AgentMode.Plan)
                 defs.Add(CreatePlanTool());
 
+            defs.Add(AskUserTool());
             return defs;
+        }
+    }
+
+    /// <summary>Zorunlu kontrol noktası: yalnızca <c>ask_user</c> sunulur.</summary>
+    public List<ToolDefinition> CheckpointDefinitions => [AskUserTool()];
+
+    /// <summary>
+    /// Çağrı araştırma bütçesine sayılır mı? read_file / list_files ve salt okuma
+    /// run_command sayılır; ask_user, write_file, create_plan ve değiştiren komutlar sayılmaz.
+    /// </summary>
+    public bool IsReadOnlyCall(string name, string argumentsJson)
+    {
+        switch (name)
+        {
+            case "read_file":
+            case "list_files":
+                return true;
+            case "run_command":
+                var args = Deserialize(argumentsJson, EvrenJsonContext.Default.RunCommandArgs);
+                return IsReadOnlyCommand(args.Command, out _);
+            default:
+                return false;
         }
     }
 
     /// <summary>Araç çağrısı; kip ihlallerinde hata metni döner.</summary>
     public async Task<string> ExecuteAsync(string name, string argumentsJson, CancellationToken ct)
     {
+        if (name == "ask_user")
+        {
+            if (OnAskUser is null)
+                return "Error: ask_user is not available in this session.";
+            var ask = Deserialize(argumentsJson, EvrenJsonContext.Default.AskUserArgs);
+            if (string.IsNullOrWhiteSpace(ask.Question))
+                return "Error: ask_user requires a non-empty 'question'.";
+            return await OnAskUser(ask, ct);
+        }
+
         if (name == "create_plan")
         {
             if (_mode != AgentMode.Plan)
@@ -213,6 +252,26 @@ public sealed class ToolGateway
             Description = "Create a plan file in a new or existing 'plans/<name>' directory. The plan is saved as 'plan.md'.",
             Parameters = JsonDocument.Parse("{" +
                 "\"type\":\"object\",\"properties\":{\"name\":{\"type\":\"string\",\"description\":\"Plan name (used as directory name)\"},\"content\":{\"type\":\"string\",\"description\":\"The plan text to save\"}},\"required\":[\"name\"]" +
+                "}")
+                .RootElement.Clone()
+        }
+    };
+
+    /// <summary>ask_user araç tanımlaması — modelin tur ortasında kullanıcıya soru sorması için.</summary>
+    private static ToolDefinition AskUserTool() => new()
+    {
+        Function = new FunctionDefinition
+        {
+            Name = "ask_user",
+            Description = "Pause and ask the user a question in the terminal; returns their answer. " +
+                          "Use kind='confirm' to ask for approval to start implementing (a positive answer unlocks implementation). " +
+                          "Use kind='question' for clarifications or option choices.",
+            Parameters = JsonDocument.Parse("{" +
+                "\"type\":\"object\",\"properties\":{" +
+                "\"question\":{\"type\":\"string\",\"description\":\"The question to ask, in the user's language. Include your findings/assumptions briefly.\"}," +
+                "\"options\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Optional short answer choices (2-5). The user may still type a free answer.\"}," +
+                "\"kind\":{\"type\":\"string\",\"enum\":[\"question\",\"confirm\"],\"description\":\"question (default) or confirm (ask to proceed with implementation).\"}" +
+                "},\"required\":[\"question\"]" +
                 "}")
                 .RootElement.Clone()
         }

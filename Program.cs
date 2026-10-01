@@ -14,6 +14,7 @@ namespace evren_cli
             var keys = new List<string>();
             var once = false;
             string? mode = null;
+            int? maxResearch = null;
             var prompt = new List<string>();
 
             for (var i = 0; i < args.Length; i++)
@@ -32,6 +33,14 @@ namespace evren_cli
                         break;
                     case "--mode" when i + 1 < args.Length:
                         mode = args[++i];
+                        break;
+                    case "--max-research" when i + 1 < args.Length:
+                        if (!int.TryParse(args[++i], out var research) || research <= 0)
+                        {
+                            Console.Error.WriteLine("--max-research expects a positive integer");
+                            return 1;
+                        }
+                        maxResearch = research;
                         break;
                     case "--once":
                         once = true;
@@ -92,7 +101,8 @@ namespace evren_cli
             using var appCts = new CancellationTokenSource();
             using var client = new EvrenClient(config.BaseUrl!, pool);
             var tools = new FileTools(workingDirectory);
-            var agent = new Agent(client, tools, config.Model!);
+            var agent = new Agent(client, tools, config.Model!, maxResearch: maxResearch);
+            Console.WriteLine($"\u001b[2m[flow: clarify \u2192 research (max {agent.MaxResearch} read-only calls per checkpoint) \u2192 implement — /go, /clarify, /maxresearch]\u001b[0m");
 
             if (mode is not null)
             {
@@ -176,6 +186,8 @@ namespace evren_cli
                                        the next one takes over automatically.
                   -C, --cwd <dir>      Working directory (default: current)
                       --mode <mode>     Start in ask | plan | normal (default: normal)
+                      --max-research <n> Read-only tool calls allowed before a forced
+                                       checkpoint in the research phase (default: 4)
                       --once           Run the given prompt once and exit (no REPL)
                   -v, --version        Show version and exit
                   -h, --help           Show this help

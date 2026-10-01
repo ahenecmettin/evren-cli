@@ -9,7 +9,7 @@ public sealed partial class Agent
     private void PrintHelpBrief()
     {
         Console.WriteLine(
-            $"{Dim}commands: /mode <ask|plan|normal>  /model <name>  /keys [add|rm <no>|reset]  /maxtokens <n>  /maxrounds <n>  /tokens  /clear  /commit  /version  /help  /exit " +
+            $"{Dim}commands: /mode <ask|plan|normal>  /go  /clarify  /model <name>  /keys [add|rm <no>|reset]  /maxtokens <n>  /maxrounds <n>  /maxresearch <n>  /tokens  /clear  /commit  /version  /help  /exit " +
             $"(ayrıntı için /help — önerilen: /model glm-5.3){Reset}");
     }
 
@@ -49,6 +49,17 @@ public sealed partial class Agent
               {Bold}/maxrounds <n>{Reset}             {Dim}Tek kullanıcı turunda izin verilen araç (tool) adımı sayısı (varsayılan {DefaultMaxRounds}).{Reset}
                 {Dim}Bir tur = modelin art arda dosya okuyup komut çalıştırabildiği döngü.{Reset}
                 {Dim}Örnek: /maxrounds 20    {Dim}→ küçük görevlerde erken durdur, maliyeti sınırla.{Reset}
+
+              {Bold}/maxresearch <n>{Reset}           {Dim}Kontrol noktası zorunlu olmadan art arda yapılabilecek salt-okuma araç çağrısı (varsayılan {DefaultMaxResearch}).{Reset}
+                {Dim}Research evresinde bütçe dolunca model yalnızca ask_user ile size dönebilir; sonsuz keşfi engeller.{Reset}
+                {Dim}Örnek: /maxresearch 2   {Dim}→ çok sık sor; /maxresearch 10 → daha serbest araştırma.{Reset}
+
+              {Bold}/go{Reset}  {Dim}veya{Reset} {Bold}/implement{Reset}        {Dim}Evreyi implement'a alır: onay verildi sayılır, araçlar sınırsız çalışır.{Reset}
+                {Dim}Akış: clarify (araçsız; görev yeniden ifade edilir, soru sorulur) → research (bütçeli keşif) → implement.{Reset}
+                {Dim}"tamam / evet / devam / ok" gibi kısa onaylar da implement'a geçirir; /go kesin yoldur.{Reset}
+
+              {Bold}/clarify{Reset}                   {Dim}Evreyi başa (clarify) döndürür; bir sonraki mesaj araçsız, netleştirme sorularıyla yanıtlanır.{Reset}
+                {Dim}/phase → aktif evreyi gösterir.{Reset}
 
               {Bold}/tokens{Reset}                     {Dim}Oturumun token harcamasını ve geçmiş doluluk oranını gösterir.{Reset}
                 {Dim}Örnek çıktı: [tokens: 12400 prompt + 890 completion across 6 request(s) | history ~9300/111616]{Reset}
